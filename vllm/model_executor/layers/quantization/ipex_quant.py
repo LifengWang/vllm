@@ -213,7 +213,7 @@ class IPEXAWQLinearMethod(AWQLinearMethod):
 
         # Using the compute dtype (lowp_mode) as INT8 to leverage instructions
         # with better performance.
-        lowp_mode = ipex.quantization.WoqLowpMode.INT8
+        lowp_mode = ipex.quantization.WoqLowpMode.BF16
         # The weight will be de-packed from INT4 to INT8.
         weight_dtype = ipex.quantization.WoqWeightDtype.INT4
         # The float activation will be quantized (dynamic, per-token) to INT8.

@@ -85,10 +85,42 @@ def main(args: argparse.Namespace):
             llm.stop_profile()
         else:
             start_time = time.perf_counter()
-            llm_generate()
+            outputs = llm.generate(dummy_prompts,
+                         sampling_params=sampling_params,
+                         use_tqdm=False)
             end_time = time.perf_counter()
             latency = end_time - start_time
-            return latency
+            return latency, outputs
+
+    def run_to_completion_benchmark(profile_dir: Optional[str] = None):
+        if profile_dir:
+            with torch.profiler.profile(
+                    activities=[
+                        torch.profiler.ProfilerActivity.CPU,
+                        torch.profiler.ProfilerActivity.CUDA,
+                    ],
+                    on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                        str(profile_dir))) as p:
+                llm.generate(dummy_prompts,
+                             sampling_params=sampling_params,
+                             use_tqdm=False)
+            print(p.key_averages())
+        else:
+            start_time = time.perf_counter()
+            output_matrix = llm.generate(dummy_prompts,
+                         sampling_params=sampling_params,
+                         use_tqdm=False)
+            end_time = time.perf_counter()
+            latency = end_time - start_time
+
+            # calculate token latency
+            # RequestMetrics(arrival_time=1716261373.3672826, last_token_time=1716261373.3672826, first_scheduled_time=1716261373.367539, first_token_time=1716261374.4200041, time_in_queue=0.0002562999725341797, finished_time=1716261399.178795)
+            first_token_latency, next_token_latency = [], []
+            for i in range(len(output_matrix)):
+                first_token_latency.append(output_matrix[i].metrics.first_token_time - output_matrix[i].metrics.first_scheduled_time)
+                next_token_latency.append((output_matrix[i].metrics.finished_time - output_matrix[i].metrics.first_token_time)/(args.output_len-1))
+
+            return latency, first_token_latency, next_token_latency
 
     print("Warming up...")
     for _ in tqdm(range(args.num_iters_warmup), desc="Warmup iterations"):
@@ -101,26 +133,45 @@ def main(args: argparse.Namespace):
         return
 
     # Benchmark.
-    latencies = []
+    # latencies = []
+    latencies, first_token_latencies, next_token_latencies = [], [], []
     for _ in tqdm(range(args.num_iters), desc="Profiling iterations"):
-        latencies.append(run_to_completion(profile_dir=None))
-    latencies = np.array(latencies)
-    percentages = [10, 25, 50, 75, 90, 99]
-    percentiles = np.percentile(latencies, percentages)
-    print(f"Avg latency: {np.mean(latencies)} seconds")
-    for percentage, percentile in zip(percentages, percentiles):
-        print(f"{percentage}% percentile latency: {percentile} seconds")
+        # latencies.append(run_to_completion(profile_dir=None))
+    # latencies = np.array(latencies)
+        result_latency, result_first_token, result_next_token = run_to_completion_benchmark(profile_dir=None)
+        latencies.append(result_latency)
+        first_token_latencies.append(result_first_token)
+        next_token_latencies.append(result_next_token)
+    first_token_latencies = np.array(first_token_latencies)
+    next_token_latencies = np.array(next_token_latencies)
+    # percentages = [10, 25, 50, 75, 90, 99]
+    # percentiles = np.percentile(latencies, percentages)
+    # latencies_percentiles = np.percentile(latencies, percentages)
+    # first_token_latencies_percentiles = np.percentile(first_token_latencies, percentages)
+    # next_token_latencies_percentiles = np.percentile(next_token_latencies, percentages)
 
-    # Output JSON results if specified
-    if args.output_json:
-        results = {
-            "avg_latency": np.mean(latencies),
-            "latencies": latencies.tolist(),
-            "percentiles": dict(zip(percentages, percentiles.tolist())),
-        }
-        with open(args.output_json, "w") as f:
-            json.dump(results, f, indent=4)
-        save_to_pytorch_benchmark_format(args, results)
+    print(f'Avg First token latency: {np.mean(first_token_latencies)} seconds')
+    print(f'Avg next token latency: {np.mean(next_token_latencies)} seconds')
+    print(f"Avg latency: {np.mean(latencies)} seconds")
+    # for percentage, percentile in zip(percentages, percentiles):
+    #     print(f"{percentage}% percentile latency: {percentile} seconds")
+    # for percentage, percentile in zip(percentages, latencies_percentiles):
+    #     print(f'{percentage}% latencies percentile latency: {percentile} seconds')
+    # for percentage, percentile in zip(percentages, first_token_latencies_percentiles):
+    #     print(f'{percentage}% first token percentile latency: {percentile} seconds')
+    # for percentage, percentile in zip(percentages, next_token_latencies_percentiles):
+    #     print(f'{percentage}% next token percentile latency: {percentile} seconds')
+
+    # # Output JSON results if specified
+    # if args.output_json:
+    #     results = {
+    #         "avg_latency": np.mean(latencies),
+    #         "latencies": latencies.tolist(),
+    #         "percentiles": dict(zip(percentages, percentiles.tolist())),
+    #     }
+    #     with open(args.output_json, "w") as f:
+    #         json.dump(results, f, indent=4)
+    #     save_to_pytorch_benchmark_format(args, results)
 
 
 def create_argument_parser():
